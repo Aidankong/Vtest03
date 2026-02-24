@@ -1,0 +1,3 @@
+config load /home/luxsan_aard/workspace/STM32/Vtest03/Vtest03/Vtest03.ioc
+project generate
+exit

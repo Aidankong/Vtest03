@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmake:*)",
+      "Bash(cmake --build:*)",
+      "Bash(where:*)",
+      "Bash(\"/c/Program Files/JetBrains/CLion 2025.3.2/bin/ninja\")",
+      "Bash(\"/c/Program Files/JetBrains/CLion 2025.3.2/bin/ninja/win/x64/ninja.exe\")",
+      "WebSearch",
+      "Bash(node:*)",
+      "Bash(cat > /home/luxsan_aard/workspace/STM32/Vtest03/Vtest03/cube_headless.txt << 'EOF'\nconfig load /home/luxsan_aard/workspace/STM32/Vtest03/Vtest03/Vtest03.ioc\nproject generate\nexit\nEOF)",
+      "Bash(/home/luxsan_aard/STM32CubeMX/STM32CubeMX -q cube_headless.txt)",
+      "Bash(/home/luxsan_aard/STM32CubeMX/STM32CubeMX -q /home/luxsan_aard/workspace/STM32/Vtest03/Vtest03/cube_headless.txt)"
+    ]
+  }
+}
