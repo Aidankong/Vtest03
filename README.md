@@ -76,8 +76,8 @@
 
 **软件滤波器**（已实现）：
 - 算法：16样本滑动平均
-- 采样率：10kHz（TIM2触发）
-- 滤波周期：1.6ms
+- 采样率：1kHz（TIM2触发）
+- 滤波周期：16ms
 - 初始化：使用独立计数器 `filter_count`，确保缓冲区完全填满后才标记初始化完成
 - 效果：自动消除随机噪声，读数稳定
 
@@ -198,8 +198,8 @@ State:OFF 100% ← 关断状态，GPIO=HIGH，PWM=100%
 ```
 
 - 显示经过**16样本滑动平均滤波**后的ADC值
-- 硬件采样：8次DMA采集 @ 10kHz
-- 软件滤波：16样本滑动平均（总周期1.6ms）
+- 硬件采样：8次DMA采集 @ 1kHz
+- 软件滤波：16样本滑动平均（总周期16ms）
 - 对应电压计算：`Vbus = (ADC / 4095 × 3.3V) × 25`
 - **接地时应显示接近0**（软件滤波会消除悬空噪声）
 - 48V对应约ADC=400-450
@@ -328,7 +328,7 @@ OLED显示：`TER111(45,50)`
                 │
         ┌───────▼─────────┐
         │  TIM2_CC2       │
-        │  10kHz触发源    │
+        │  1kHz触发源     │
         └─────────────────┘
 ```
 
@@ -337,7 +337,7 @@ OLED显示：`TER111(45,50)`
 ```
 [硬件触发]          [DMA传输]          [主循环处理]
 TIM2 CC2 ──→ ADC转换 ──→ DMA ──→ Set Flag ──→ Process
-  10kHz     (硬件)      (自动)     (中断)       (主循环)
+  1kHz      (硬件)      (自动)     (中断)       (主循环)
 ```
 
 **关键原则**：
@@ -391,6 +391,23 @@ Core/
 cd C:\STM32\Projects\Vtest03\Vtest03\build\Debug
 "C:\Program Files\JetBrains\CLion 2025.3.2\bin\ninja\win\x64\ninja.exe"
 ```
+
+#### 方法3：纯 IOC + CubeMX CLI（自动化推荐）
+
+1. 仅修改 `Vtest03.ioc`（外设/引脚配置单一真源）
+2. 运行无头生成脚本 `cube_headless.txt`
+3. 用 CMake 构建验证
+
+```bash
+/Applications/STMicroelectronics/STM32CubeMX.app/Contents/MacOs/STM32CubeMX -q /Users/aidan/Documents/AI-system/Vtest03/cube_headless.txt
+cmake --preset Debug
+cmake --build build/Debug
+```
+
+**本项目注意**：
+- 当前项目/版本下，`generate code <project_root>` 可能生成到 `Src/`、`Inc/`
+- 构建系统实际使用 `Core/Src`、`Core/Inc`
+- 因此 `cube_headless.txt` 统一使用 `project generate`
 
 ### 构建输出
 
@@ -458,10 +475,10 @@ cd C:\STM32\Projects\Vtest03\Vtest03\build\Debug
 ```
 
 **关键参数**：
-- **DMA采样**：8样本 @ 10kHz → 0.8ms周期
-- **滤波窗口**：16样本 → 1.6ms总周期
+- **DMA采样**：8样本 @ 1kHz → 8ms周期
+- **滤波窗口**：16样本 → 16ms总周期
 - **内存占用**：32字节（16 × uint16_t）
-- **响应延迟**：1.6ms（可接受）
+- **响应延迟**：16ms（可接受）
 
 **效果对比**：
 
@@ -469,7 +486,7 @@ cd C:\STM32\Projects\Vtest03\Vtest03\build\Debug
 |------|--------|--------|
 | **ADC悬空** | 0-4095乱跳 | 稳定在小范围内 |
 | **恒定电压** | ±5 LSB波动 | ±1 LSB波动 |
-| **电压变化** | 立即响应 | 1.6ms平滑过渡 |
+| **电压变化** | 立即响应 | 16ms平滑过渡 |
 | **噪声抑制** | 无 | 强（1/√16 = 1/4）**
 
 ### 迟滞保护逻辑
@@ -717,7 +734,7 @@ FLASH: 37624 B / 64 KB (57.41%)
    - GPIO控制：PA1 → PA4（标签 POWER_CTRL）
    - PWM：TIM3_CH1/PA6 → TIM3_CH3/PB0（CCR1→CCR3）
    - 新增：USART2（PA2/PA3），115200波特率，printf调试输出
-   - PA4 默认 HIGH 修复：CubeMX生成RESET，USER CODE中覆写为SET
+   - PA4 默认 HIGH 修复：通过 IOC `PA4.PinState=GPIO_PIN_SET` 直接生成安全默认态（不再依赖 USER CODE 覆写）
 
 8. **oled_font.h 大小写修复**
    - 问题：Linux大小写敏感，`oled.c`引用`OLED_Font.h`但实际文件名为`oled_font.h`
@@ -734,6 +751,11 @@ FLASH: 37624 B / 64 KB (57.41%)
       - 定义常量 `PWM_DUTY_CUTOFF = 7200` 和 `PWM_DUTY_CONDUCTION = 0`
       - 使用 HAL 宏 `__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, value)` 替代直接寄存器操作
     - 效果：代码更易维护，修改 ARR 配置时只需更新常量定义
+
+11. **CubeMX CLI 生成路径修复**（✅ 当前版本）
+    - 问题：`generate code <project_root>` 在当前项目中可能落到 `Src/`、`Inc/`，导致构建仍使用旧的 `Core/Src`、`Core/Inc`
+    - 修复：`cube_headless.txt` 统一采用 `project toolchain CMake` + `project name Vtest03` + `project generate`
+    - 效果：IOC 修改会稳定落地到实际参与编译的源码目录
 
 ---
 

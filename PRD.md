@@ -92,7 +92,7 @@ No software-triggered ADC conversions are allowed.
     - HIGH = cutoff (OFF)
     - LOW  = conduction (ON)
 - Default state after reset: HIGH (OFF)
-- Note: CubeMX generates RESET as default; overridden in MX_GPIO_Init_2 USER CODE block
+- Note: Safe default is configured in IOC (`PA4.PinState=GPIO_PIN_SET`, with `PA4.GPIOParameters` including `PinState`), not by post-generation USER CODE override
 
 [I2C + OLED]
 - I2C1
@@ -192,7 +192,7 @@ Software Architecture
     - Line 4: TERxyz(lower,upper) where x,y,z = diagnostic flags
       - T: TIM2 running status (1=running)
       - E: ADC external trigger enabled (1=enabled)
-      - R: Data ready flag (1=new data available)
+      - R: Data flow flag (1=DMA full-buffer events observed)
       - (lower,upper): Display actual hysteresis threshold values from VBUS_LOWER_THRESHOLD and VBUS_UPPER_THRESHOLD variables
   - Right-side LUX marker: L, U, X vertically aligned on lines 1-3
 
@@ -201,7 +201,7 @@ Validation Requirements
 ========================
 
 The implementation must clearly demonstrate:
-1. ADC conversion rate is exactly 10 kHz (timer-driven)
+1. ADC conversion rate is exactly 1 kHz (timer-driven)
 2. DMA averaging over 8 samples works correctly
 3. Hysteresis prevents output toggling in 48–51V range
 4. Default power-up state is OFF

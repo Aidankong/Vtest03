@@ -41,16 +41,16 @@ void MX_TIM2_Init(void)
 
   /* USER CODE BEGIN TIM2_Init 1 */
   /*
-   * TIM2 频率配置：10 kHz ADC触发频率
+   * TIM2 频率配置：1 kHz ADC触发频率
    * 系统时钟 = 72 MHz
    * APB1 = 36 MHz (HCLK/2)
    * TIM2时钟 = 72 MHz (F1系列：APB1定时器时钟×2)
    *
    * 频率计算：
    *   TIM2频率 = TIM2时钟 / (PSC + 1) / (ARR + 1)
-   *            = 72MHz / (71 + 1) / (99 + 1)
-   *            = 72MHz / 72 / 100
-   *            = 10 kHz
+   *            = 72MHz / (71 + 1) / (999 + 1)
+   *            = 72MHz / 72 / 1000
+   *            = 1 kHz
    */
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;

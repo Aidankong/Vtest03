@@ -44,7 +44,7 @@ The external gate driver is **LOW-level active**:
 - HIGH = cutoff (OFF)
 
 Default (safe) state after reset:
-- PA4 = HIGH (OFF) — CubeMX generates RESET; corrected in `MX_GPIO_Init` USER CODE block
+- PA4 = HIGH (OFF) — configured in IOC via `PA4.PinState=GPIO_PIN_SET`
 - PWM (TIM3_CH3/PB0) = 100% duty (constant HIGH/OFF) - set as PWM_DUTY_CUTOFF = ARR + 1 = 7200
 
 ### Software Architecture Pattern
@@ -134,23 +134,25 @@ After modifying `Vtest03.ioc` and regenerating code:
 - User code between `/* USER CODE BEGIN */` markers is preserved
 - Rebuild to verify toolchain integration
 
-### Known Post-Generation Fix Required
+### IOC-First Safety Requirement
 
-CubeMX generates PA4 initial state as `GPIO_PIN_RESET` (LOW). This is **unsafe**.
-The override is placed in `gpio.c` inside `/* USER CODE BEGIN MX_GPIO_Init_2 */`:
-```c
-HAL_GPIO_WritePin(POWER_CTRL_GPIO_Port, POWER_CTRL_Pin, GPIO_PIN_SET);
-```
-Do not remove this block when regenerating code.
+Do not rely on post-generation patches in `gpio.c` for PA4 safe level.
+Keep safe default in IOC:
+- `PA4.GPIOParameters` includes `PinState`
+- `PA4.PinState=GPIO_PIN_SET`
 
 ### CubeMX Headless Regeneration
 
 ```bash
-/home/luxsan_aard/STM32CubeMX/STM32CubeMX -q /path/to/cube_headless.txt
+/Applications/STMicroelectronics/STM32CubeMX.app/Contents/MacOs/STM32CubeMX -q /Users/aidan/Documents/AI-system/Vtest03/cube_headless.txt
 ```
 Script content (`cube_headless.txt`):
 ```
-config load /home/luxsan_aard/workspace/STM32/Vtest03/Vtest03/Vtest03.ioc
+config load /Users/aidan/Documents/AI-system/Vtest03/Vtest03.ioc
+project toolchain CMake
+project name Vtest03
 project generate
 exit
 ```
+
+For this repository, prefer `project generate`: `generate code /project_root` may generate `Src/Inc`, while the build consumes `Core/Src` and `Core/Inc`.

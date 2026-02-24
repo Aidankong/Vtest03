@@ -21,9 +21,9 @@
 
 ### 项目路径
 ```
-项目根目录: /home/luxsan_aard/workspace/STM32/Vtest_pvt
-IOC 文件: STM32F103C8T6_Template.ioc
-脚本文件: cube_headless.txt
+项目根目录: /Users/aidan/Documents/AI-system/Vtest03
+IOC 文件: /Users/aidan/Documents/AI-system/Vtest03/Vtest03.ioc
+脚本文件: /Users/aidan/Documents/AI-system/Vtest03/cube_headless.txt
 ```
 
 ---
@@ -42,10 +42,10 @@ IOC 文件: STM32F103C8T6_Template.ioc
 
 ```bash
 # 无头模式（推荐用于自动化）
-/home/luxsan_aard/STM32CubeMX/STM32CubeMX -q /path/to/script.txt
+/Applications/STMicroelectronics/STM32CubeMX.app/Contents/MacOs/STM32CubeMX -q /path/to/script.txt
 
 # 脚本模式（需要图形环境）
-/home/luxsan_aard/STM32CubeMX/STM32CubeMX -s /path/to/script.txt
+/Applications/STMicroelectronics/STM32CubeMX.app/Contents/MacOs/STM32CubeMX -s /path/to/script.txt
 ```
 
 ---
@@ -57,7 +57,9 @@ IOC 文件: STM32F103C8T6_Template.ioc
 创建文件 `cube_headless.txt`：
 
 ```
-config load /home/luxsan_aard/workspace/STM32/Vtest_pvt/STM32F103C8T6_Template.ioc
+config load /Users/aidan/Documents/AI-system/Vtest03/Vtest03.ioc
+project toolchain CMake
+project name Vtest03
 project generate
 exit
 ```
@@ -68,9 +70,10 @@ exit
 |------|------|------|
 | `config load <path>` | 加载 IOC 配置文件 | `config load /path/to/project.ioc` |
 | `config save <path>` | 保存 IOC 配置文件 | `config save /path/to/project.ioc` |
+| `generate code <path>` | 仅生成代码到指定路径 | `generate code /path/to/project_root` |
 | `project generate` | 生成完整项目代码 | `project generate` |
 | `project toolchain <name>` | 设置工具链 | `project toolchain CMake` |
-| `project path <path>` | 设置项目路径 | `project path /home/user/project` |
+| `project path <path>` | （可选）设置项目路径，部分版本可能返回 `KO` | `project path /home/user/project` |
 | `project name <name>` | 设置项目名称 | `project name MyProject` |
 | `exit` | 退出程序 | `exit` |
 
@@ -79,6 +82,7 @@ exit
 1. **路径必须使用绝对路径**
 2. **脚本文件每行一个命令**
 3. **命令顺序**: 加载配置 → 生成项目 → 退出
+4. **本项目优先 `project generate`**：`generate code` 可能生成到 `Src/Inc`，而构建使用 `Core/Src` 与 `Core/Inc`
 
 ---
 
@@ -97,7 +101,7 @@ exit
 
 #### 步骤 1: 修改 IOC 文件
 
-编辑 `STM32F103C8T6_Template.ioc`，添加或修改配置。
+编辑 `Vtest03.ioc`，添加或修改配置。
 
 **IOC 文件关键配置段：**
 
@@ -138,8 +142,7 @@ ProjectManager.functionlistsort=1-SystemClock_Config-RCC-false-HAL-false,2-MX_GP
 #### 步骤 2: 运行 CLI 生成代码
 
 ```bash
-cd /home/luxsan_aard/workspace/STM32/Vtest_pvt
-/home/luxsan_aard/STM32CubeMX/STM32CubeMX -q cube_headless.txt
+/Applications/STMicroelectronics/STM32CubeMX.app/Contents/MacOs/STM32CubeMX -q /Users/aidan/Documents/AI-system/Vtest03/cube_headless.txt
 ```
 
 **成功输出标志：**
@@ -371,13 +374,22 @@ USART2.Dmaenabledtx=1
 NVIC.USART2_IRQn=true\:0\:0\:false\:false\:true\:true\:true\:true
 ```
 
+### Q6: IOC 改了但运行行为没变
+
+**原因**: 使用 `generate code` 后代码生成到了 `Src/`、`Inc/`，但工程编译的是 `Core/Src`、`Core/Inc`
+
+**解决方案**:
+1. 脚本改为 `project generate`
+2. 重新运行 CLI 并确认日志出现 `Generated code: .../Core/Src/...`
+3. 再执行 `cmake --preset Debug && cmake --build build/Debug`
+
 ---
 
 ## 快速参考命令
 
 ```bash
 # 生成代码
-/home/luxsan_aard/STM32CubeMX/STM32CubeMX -q cube_headless.txt
+/Applications/STMicroelectronics/STM32CubeMX.app/Contents/MacOs/STM32CubeMX -q /Users/aidan/Documents/AI-system/Vtest03/cube_headless.txt
 
 # 编译项目
 cmake --preset Debug && cmake --build build/Debug
@@ -390,7 +402,7 @@ ls -la Core/Src/
 ls -la Core/Inc/
 
 # 检查编译结果
-arm-none-eabi-size build/Debug/STM32F103C8T6_Template.elf
+arm-none-eabi-size build/Debug/Vtest03.elf
 ```
 
 ---
@@ -399,6 +411,7 @@ arm-none-eabi-size build/Debug/STM32F103C8T6_Template.elf
 
 | 日期 | 版本 | 说明 |
 |------|------|------|
+| 2026-02-24 | 1.1 | 更新为 Vtest03 实际绝对路径；补充 `generate code` 目录错位风险与 `project generate` 规避策略 |
 | 2026-02-24 | 1.0 | 初始版本，包含 USART2+DMA+中断 配置示例 |
 
 ---

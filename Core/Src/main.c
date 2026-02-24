@@ -50,12 +50,14 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-/* ADC DMA buffer - 8 samples for hardware-triggered sampling at 10 kHz */
+/* ADC DMA buffer - 8 samples for hardware-triggered sampling at 1 kHz */
 #define ADC_BUFFER_SIZE 8
 uint16_t adc_buffer[ADC_BUFFER_SIZE];
 
 /* Flag set by DMA callback when new data is available */
 volatile uint8_t adc_data_ready = 0;
+volatile uint32_t adc_full_buffer_events = 0;
+uint32_t last_adc_full_buffer_events = 0;
 
 /* System state */
 typedef enum {
@@ -172,22 +174,28 @@ int main(void)
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, PWM_DUTY_CUTOFF);  /* 100% duty = cutoff */
 
   /* Start PWM output on CH3 (PB0) */
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+  if (HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
   /* Start ADC with DMA FIRST - ADC must be ready before TIM2 triggers it
    * ADC is configured for external trigger (TIM2_CC2), so it will wait
-   * for the trigger signal after this call
-   *
-   * NOTE: For STM32F1, ensure external trigger is enabled in ADC_CR2 */
-  ADC1->CR2 |= ADC_CR2_EXTTRIG;  /* Explicitly enable external trigger */
-  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, ADC_BUFFER_SIZE);
+   * for the trigger signal after this call */
+  if (HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, ADC_BUFFER_SIZE) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
-  /* Start TIM2 Output Compare LAST - this starts triggering the ADC at 10 kHz
+  /* Start TIM2 Output Compare LAST - this starts triggering the ADC at 1 kHz
    * Delay: ensure ADC DMA is fully ready before first trigger */
   HAL_Delay(10);
 
-  /* Start TIM2 - this should trigger ADC conversions at 10 kHz */
-  HAL_TIM_OC_Start(&htim2, TIM_CHANNEL_2);
+  /* Start TIM2 - this should trigger ADC conversions at 1 kHz */
+  if (HAL_TIM_OC_Start(&htim2, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
   /* Initialize OLED display */
   OLED_Init();
@@ -292,6 +300,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 {
   if (hadc->Instance == ADC1)
   {
+    adc_full_buffer_events++;
     adc_data_ready = 1;  /* Set flag for main loop processing */
   }
 }
@@ -299,15 +308,12 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 /**
  * @brief ADC DMA Half Conversion Complete Callback
  * @param hadc: ADC handle
- * @note This callback is triggered when DMA completes half buffer transfer
- *       Also set data ready flag for more frequent updates
+ * @note Half-transfer events are intentionally ignored because the control
+ *       path averages the full 8-sample buffer.
  */
 void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
 {
-  if (hadc != NULL && hadc->Instance == ADC1)
-  {
-    adc_data_ready = 1;  /* Set flag for main loop processing */
-  }
+  (void)hadc;
 }
 
 /**
@@ -477,19 +483,22 @@ void Update_OLED_Display(void)
   OLED_ShowString(3, 1, line_buffer);
   OLED_ShowString(3, 16, "X");  /* LUX - X at right side */
 
-  /* Display diagnostic info - check ADC and TIM2 status */
-  uint32_t adc_cr2 = ADC1->CR2;
-  uint8_t exttrig = (adc_cr2 & ADC_CR2_EXTTRIG) ? 1 : 0;
+  /* Display diagnostic info - check ADC/TIM2 status and data flow heartbeat */
+  uint8_t exttrig = (hadc1.Init.ExternalTrigConv == ADC_EXTERNALTRIGCONV_T2_CC2) ? 1U : 0U;
   uint8_t tim2_cr1 = (TIM2->CR1 & TIM_CR1_CEN) ? 1 : 0;
+  uint8_t data_flow_ok = (adc_full_buffer_events != last_adc_full_buffer_events) ? 1U : 0U;
+  last_adc_full_buffer_events = adc_full_buffer_events;
   /* Display actual threshold values from defines (convert float to int for printf) */
   snprintf(line_buffer, sizeof(line_buffer), "TER%u%u%u(%d,%d)",
-           tim2_cr1, exttrig, adc_data_ready,
+           tim2_cr1, exttrig, data_flow_ok,
            (int)VBUS_LOWER_THRESHOLD, (int)VBUS_UPPER_THRESHOLD);
   OLED_ShowString(4, 1, line_buffer);
 
-  /* Send periodic debug info via UART */
-  printf("[MONITOR] Vbus=%.1fV ADC=%lu State=%s\r\n",
-         vbus_voltage, adc_avg,
+  /* Send periodic debug info via UART without float-format dependency */
+  uint32_t monitor_vbus_int = (uint32_t)vbus_voltage;
+  uint32_t monitor_vbus_frac = (uint32_t)(vbus_voltage * 10.0f) % 10;
+  printf("[MONITOR] Vbus=%lu.%luV ADC=%lu State=%s\r\n",
+         monitor_vbus_int, monitor_vbus_frac, adc_avg,
          (current_state == STATE_CUTOFF) ? "CUTOFF" : "CONDUCTION");
 }
 /* USER CODE END 4 */
