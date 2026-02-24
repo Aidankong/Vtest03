@@ -39,11 +39,11 @@ Peripheral Constraints
 - Debug output events:
     - Startup banner (pins, version)
     - State transitions: [STATE] CUTOFF / [STATE] CONDUCTION
-    - 1 Hz monitor: [MONITOR] Vbus=XX.XV ADC=XXXX State=XXX
+    - 1 Hz monitor: [MONITOR] Vbus=XX.XV ADC5=XXXX ADC6=XXXX ADC7=XXXX State=XXX
 
 [ADC]
 - ADC1
-- Channel: PA5 (ADC_IN5)
+- Channel: PA5/PA6/PA7 (ADC_IN5/IN6/IN7, regular scan)
 - Trigger: hardware only
 - Sampling frequency: 1 kHz
 - Trigger source: TIM2 Capture Compare 2 event
@@ -51,7 +51,7 @@ Peripheral Constraints
 - Continuous mode: DISABLED
 - DMA: ENABLED
 - DMA mode: CIRCULAR
-- DMA buffer length: **8 samples (fixed, industrial mode)**
+- DMA buffer length: **24 samples (3 channels × 8 samples per channel)**
 - DMA channel: DMA1_Channel1
 
 ADC timing must be driven ONLY by TIM2 CC2 events.
@@ -73,7 +73,7 @@ No software-triggered ADC conversions are allowed.
 - Note: TIM2->CCER CC2E bit must be set to enable CC2 event for ADC trigger
 
 [PWM]
-- TIM3_CH3 on PB0
+- TIM3_CH3 on PB0 and TIM3_CH4 on PB1
 - Frequency: 10 kHz
     - PSC = 0
     - ARR = 7199
@@ -83,8 +83,8 @@ No software-triggered ADC conversions are allowed.
     - LOW level = conduction (ON)
     - HIGH level = cutoff (OFF)
 - Default power-up state:
-    - PWM output = constant HIGH
-    - Implemented as CCR3 = ARR + 1 = 7200
+    - PWM outputs = constant HIGH
+    - Implemented as CCR3 = CCR4 = ARR + 1 = 7200
 
 [GPIO]
 - PA4 (label: POWER_CTRL): digital output
@@ -115,7 +115,7 @@ Electrical & Safety Rules
 - System default must be SAFE (power OFF)
 - On reset:
     - PA4 = HIGH
-    - PWM (PB0/TIM3_CH3) = 100% duty (constant HIGH)
+    - PWM (PB0/TIM3_CH3 and PB1/TIM3_CH4) = 100% duty (constant HIGH)
 
 ========================
 Forbidden Actions
@@ -143,10 +143,10 @@ Functional Requirements
 - Voltage divider ratio = 25:1 (fixed, calibrated)
 
 Formula:
-Vadc = adc_avg * 3.3 / 4095
+Vadc = adc5_avg * 3.3 / 4095
 Vbus = Vadc * 25
 
-adc_avg must be calculated as the average of the 8 DMA samples.
+`adc5_avg` must be calculated as CH5 average from interleaved DMA data (24 samples total, 8 samples per channel).
 
 ========================
 Hysteresis Logic (STRICT)
@@ -159,10 +159,10 @@ Thresholds:
 Rules:
 - If Vbus > 51V:
   - PA4 = HIGH
-  - PWM (PB0/TIM3_CH3) = 100% (constant HIGH, cutoff)
+  - PWM (PB0/TIM3_CH3 and PB1/TIM3_CH4) = 100% (constant HIGH, cutoff)
 - If Vbus < 48V:
   - PA4 = LOW
-  - PWM (PB0/TIM3_CH3) = 0% (constant LOW, conduction)
+  - PWM (PB0/TIM3_CH3 and PB1/TIM3_CH4) = 0% (constant LOW, conduction)
 - If 48V ≤ Vbus ≤ 51V:
   - Maintain previous state (no toggling)
 
@@ -179,16 +179,16 @@ Software Architecture
   - NO voltage calculation
   - NO GPIO / PWM updates
 - Main loop or low-frequency task:
-  - Calculate averaged ADC value from 8-sample DMA buffer
+  - Calculate averaged ADC value from interleaved DMA buffer (CH5/6/7, 8 samples each)
   - Apply 16-sample moving average filter for noise reduction
   - Convert to voltage
   - Apply hysteresis logic
-  - Update PA4 and PWM (TIM3_CH3/PB0) synchronously
+  - Update PA4 and PWM (TIM3_CH3/PB0 + TIM3_CH4/PB1) synchronously
 - OLED task (1 Hz):
   - Display format (4 lines × 16 chars):
     - Line 1: Vbus:XX.XV (voltage with 1 decimal) + L (right-aligned)
     - Line 2: State:ON 0% or State:OFF 100% + U (right-aligned)
-    - Line 3: ADC:XXX (raw ADC value) + X (right-aligned)
+    - Line 3: ADC5:XXX (CH5 raw ADC value) + X (right-aligned)
     - Line 4: TERxyz(lower,upper) where x,y,z = diagnostic flags
       - T: TIM2 running status (1=running)
       - E: ADC external trigger enabled (1=enabled)
@@ -202,7 +202,7 @@ Validation Requirements
 
 The implementation must clearly demonstrate:
 1. ADC conversion rate is exactly 1 kHz (timer-driven)
-2. DMA averaging over 8 samples works correctly
+2. DMA averaging over 3 channels × 8 samples works correctly
 3. Hysteresis prevents output toggling in 48–51V range
 4. Default power-up state is OFF
 5. OLED values match internal logic state

@@ -7,10 +7,10 @@
 ### 核心特性
 
 - **UART调试输出**：USART2（PA2/PA3），115200波特率，printf重定向，实时状态上报
-- **硬件触发的ADC采样**：TIM2_CC2以1kHz触发ADC，DMA循环模式传输数据，采样引脚PA5
+- **硬件触发的ADC采样**：TIM2_CC2以1kHz触发ADC，3通道采样（PA5/PA6/PA7），DMA循环模式传输
 - **软件滤波器**：16样本滑动平均，消除ADC噪声和悬空波动
 - **迟滞电压保护**：48V以下导通，51V以上关断，48-51V之间维持状态
-- **双重控制输出**：PA4（GPIO）+ TIM3_CH3/PB0（PWM），实现冗余控制
+- **三路控制输出**：PA4（GPIO）+ TIM3_CH3/PB0 + TIM3_CH4/PB1（PWM），实现冗余控制
 - **实时OLED显示**：电压、状态、ADC原始值、诊断信息，右侧LUX标识
 - **零RTOS设计**：纯中断+主循环架构，确保确定性
 
@@ -25,22 +25,27 @@
 | **UART TX** | PA2 | 复用推挽 | USART2发送，接USB-TTL的RX |
 | **UART RX** | PA3 | 输入 | USART2接收，接USB-TTL的TX |
 | **控制输出** | PA4 | 推挽输出 | 低电平有效：LOW=导通，HIGH=关断 |
-| **ADC输入** | PA5 | 模拟输入 | 电压采样输入（ADC1_IN5，经过分压电路） |
-| **PWM输出** | PB0 | 复用推挽 | TIM3_CH3，10kHz PWM，低电平有效 |
+| **ADC输入1** | PA5 | 模拟输入 | 主控制通道（ADC1_IN5，经过分压电路） |
+| **ADC输入2** | PA6 | 模拟输入 | 扩展采样通道（ADC1_IN6） |
+| **ADC输入3** | PA7 | 模拟输入 | 扩展采样通道（ADC1_IN7） |
+| **PWM输出1** | PB0 | 复用推挽 | TIM3_CH3，10kHz PWM，低电平有效 |
+| **PWM输出2** | PB1 | 复用推挽 | TIM3_CH4，10kHz PWM，低电平有效 |
 | **I2C SCL** | PB6 | 开漏输出 | OLED时钟线（内部上拉） |
 | **I2C SDA** | PB7 | 开漏输出 | OLED数据线（内部上拉） |
 
 ### 电路连接要求
 
-#### 1. 电压采样电路（PA5）
+#### 1. 电压采样电路（PA5/PA6/PA7）
 
 ```
 总线电压 ────[分压电阻1]────┬────[分压电阻2]──── GND
                             │
                             ├────[滤波电容]──── GND (可选)
                             │
-                            └──── PA5 (ADC1_IN5)
+                            └──── PA5 (ADC1_IN5, 主控制通道)
 ```
+
+PA6/PA7 与 PA5 使用同类型采样网络（对应 ADC1_IN6 / ADC1_IN7），用于扩展监测。
 
 **参数计算**：
 - 目标测量范围：48V - 51V
@@ -81,7 +86,7 @@
 - 初始化：使用独立计数器 `filter_count`，确保缓冲区完全填满后才标记初始化完成
 - 效果：自动消除随机噪声，读数稳定
 
-#### 2. 控制输出（PA4 + PB0）
+#### 2. 控制输出（PA4 + PB0 + PB1）
 
 外部门驱动为**低电平有效**：
 - **LOW** = 导通（ON）
@@ -89,7 +94,7 @@
 
 **安全默认状态**（复位后）：
 - PA4 = HIGH（OFF）
-- PWM（PB0）= 100%占空比（恒定HIGH/OFF，CCR3=7200）
+- PWM（PB0/PB1）= 100%占空比（恒定HIGH/OFF，CCR3/CCR4=7200）
 
 **连接方式**：
 ```
@@ -97,13 +102,15 @@
         ┌──────────────┐
 PA4 ────┤ GPIO控制     ├───┐
         │              │   │
-PB0 ────┤ PWM输出     ├───┼───┬──→ 外部门驱动电路
+PB0 ────┤ PWM输出1    ├───┬───┐
+        │              │   │   │
+PB1 ────┤ PWM输出2    ├───┤   ├──→ 外部门驱动电路
         │              │   │   │
 GND ────┤ GND          ├───┴───┘
         └──────────────┘
 ```
 
-两个输出应在外部硬件连接（二极管OR门或直接并联），确保任一输出为HIGH时系统关断。
+三路输出应在外部硬件连接（二极管OR门或直接并联），确保任一输出为HIGH时系统关断。
 
 #### 3. UART调试接口（PA2/PA3）
 
@@ -122,13 +129,13 @@ GND ────┤ GND          ├──────┤ GND      │
 ```
 ========================================
 Power Protection System v2.0
-ADC: PA5/CH5, PWM: PB0/CH3, GPIO: PA4
+ADC: PA5/PA6/PA7 (CH5/6/7), PWM: PB0/CH3 + PB1/CH4, GPIO: PA4
 UART: PA2/PA3 @ 115200
 ========================================
 [STATE] CUTOFF
-[MONITOR] Vbus=52.3V ADC=516 State=CUTOFF
+[MONITOR] Vbus=52.3V ADC5=516 ADC6=512 ADC7=509 State=CUTOFF
 [STATE] CONDUCTION
-[MONITOR] Vbus=46.8V ADC=462 State=CONDUCTION
+[MONITOR] Vbus=46.8V ADC5=462 ADC6=458 ADC7=460 State=CONDUCTION
 ```
 
 #### 4. OLED显示屏（SSD1306，128x64）
@@ -145,7 +152,7 @@ UART: PA2/PA3 @ 115200
 ┌──────────────────────┐
 │Vbus:XX.XV         L │  第1行：总线电压 + L
 │State:ON 0%        U │  第2行：系统状态 + U
-│ADC:XXX            X │  第3行：ADC原始值 + X
+│ADC5:XXX           X │  第3行：ADC5原始值 + X
 │TER111(48,51)        │  第4行：诊断信息+阈值
 └──────────────────────┘
 ```
@@ -181,26 +188,27 @@ State:OFF 100% ← 关断状态，GPIO=HIGH，PWM=100%
       State:OFF 100%    U
 ```
 
-- **ON（导通）**：PA4=LOW，TIM3_CH3 CCR3=0（恒定LOW）
-- **OFF（关断）**：PA4=HIGH，TIM3_CH3 CCR3=7200（恒定HIGH）
+- **ON（导通）**：PA4=LOW，TIM3_CH3/CH4 CCR3/CCR4=0（恒定LOW）
+- **OFF（关断）**：PA4=HIGH，TIM3_CH3/CH4 CCR3/CCR4=7200（恒定HIGH）
 - 48V以下自动切换至ON
 - 51V以上自动切换至OFF
 - 48-51V之间维持当前状态（迟滞区）
 - **右侧"U"**：LUX标识第二部分
 
-### 第3行：ADC（原始采样值）
+### 第3行：ADC5（主控制通道原始采样值）
 
 ```
-格式：ADC:XXX
-示例：ADC:450
+格式：ADC5:XXX
+示例：ADC5:450
 范围：0 - 4095（12位ADC）
-显示：ADC:450            X
+显示：ADC5:450           X
 ```
 
-- 显示经过**16样本滑动平均滤波**后的ADC值
-- 硬件采样：8次DMA采集 @ 1kHz
+- 显示控制通道 CH5 的ADC平均值
+- 硬件采样：3通道交错DMA采集（每通道8次）@ 1kHz
 - 软件滤波：16样本滑动平均（总周期16ms）
 - 对应电压计算：`Vbus = (ADC / 4095 × 3.3V) × 25`
+- 串口监控同时输出 `ADC5/ADC6/ADC7`
 - **接地时应显示接近0**（软件滤波会消除悬空噪声）
 - 48V对应约ADC=400-450
 - 51V对应约ADC=425-475
@@ -218,7 +226,7 @@ State:OFF 100% ← 关断状态，GPIO=HIGH，PWM=100%
 |------|------|--------|----------|
 | **T** | TIM2运行状态 | 1 | 0 = TIM2未启动，ADC无触发 |
 | **E** | 外部触发使能 | 1 | 0 = ADC外部触发未使能 |
-| **R** | 数据就绪标志 | 1 | 0 = DMA中断未触发，数据未更新 |
+| **R** | 数据流心跳 | 1 | 0 = 最近一秒内未观察到DMA全缓冲事件 |
 | **(48,51)** | 迟滞电压阈值 | 变量值 | 显示实际的VBUS_LOWER_THRESHOLD和VBUS_UPPER_THRESHOLD |
 | **阈值含义** | - | - | 48V导通，51V关断 |
 
@@ -231,7 +239,7 @@ State:OFF 100% ← 关断状态，GPIO=HIGH，PWM=100%
 
 ### 如何修改阈值
 
-迟滞电压阈值定义在 `Core/Src/main.c` 文件中（第75-76行）：
+迟滞电压阈值定义在 `Core/Src/main.c` 的 USER CODE 区域：
 
 ```c
 /* Voltage thresholds for hysteresis */
@@ -242,7 +250,7 @@ State:OFF 100% ← 关断状态，GPIO=HIGH，PWM=100%
 ### 修改步骤
 
 1. **打开文件**：`Core/Src/main.c`
-2. **定位位置**：找到第75-76行的阈值定义
+2. **定位位置**：找到 `VBUS_UPPER_THRESHOLD` 与 `VBUS_LOWER_THRESHOLD` 宏定义
 3. **修改数值**：
    - `VBUS_UPPER_THRESHOLD`：电压上限（超过此值关断）
    - `VBUS_LOWER_THRESHOLD`：电压下限（低于此值导通）
@@ -351,9 +359,9 @@ TIM2 CC2 ──→ ADC转换 ──→ DMA ──→ Set Flag ──→ Process
 Core/
 ├── Src/
 │   ├── main.c          # 主应用逻辑
-│   ├── adc.c           # ADC配置（PA5/CH5，外部触发）
+│   ├── adc.c           # ADC配置（PA5/PA6/PA7，外部触发扫描）
 │   ├── dma.c           # DMA配置（循环模式）
-│   ├── tim.c           # TIM2(触发)/TIM3_CH3(PWM/PB0)配置
+│   ├── tim.c           # TIM2(触发)/TIM3_CH3+CH4(PWM/PB0+PB1)配置
 │   ├── gpio.c          # GPIO配置（PA4控制输出）
 │   ├── i2c.c           # I2C配置
 │   ├── usart.c         # USART2配置（PA2/PA3，115200）
@@ -451,14 +459,15 @@ cmake --build build/Debug
    - 转换时间：约1μs @ 14MHz ADC时钟
 
 3. **DMA自动传输数据**
-   - 循环模式：8个样本缓冲区
-   - 4个样本完成 → 半传输中断 → `HAL_ADC_ConvHalfCpltCallback()`
-   - 8个样本完成 → 全传输中断 → `HAL_ADC_ConvCpltCallback()`
-   - 两个中断都设置`adc_data_ready=1`
+   - 循环模式：24个样本缓冲区（3通道 × 每通道8样本）
+   - 12个样本完成 → 半传输回调（当前实现忽略）
+   - 24个样本完成 → 全传输回调 → `HAL_ADC_ConvCpltCallback()`
+   - 仅全传输回调设置`adc_data_ready=1`
 
 4. **主循环处理**
    - 检测到`adc_data_ready=1`
-   - 计算8个样本平均值（DMA缓冲区）
+   - 从交错DMA缓冲区计算每通道8样本平均值（ADC5/6/7）
+   - 控制逻辑使用 ADC5（PA5）作为 Vbus 主通道
    - **应用16样本滑动平均滤波器**（消除噪声）
    - 转换为电压：`Vbus = (adc_avg / 4095 × 3.3V) × 25`
    - 应用迟滞逻辑
@@ -470,12 +479,14 @@ cmake --build build/Debug
 
 ```c
 /* 滤波流程 */
-每次DMA传输完成 → 计算8样本平均值 → 存入16样本环形缓冲区
-                → 计算16样本滑动平均 → 用于电压计算
+每次DMA全传输完成 → 计算ADC5/6/7每通道8样本平均值
+                 → 将ADC5平均值存入16样本环形缓冲区
+                 → 计算16样本滑动平均 → 用于电压计算
 ```
 
 **关键参数**：
-- **DMA采样**：8样本 @ 1kHz → 8ms周期
+- **DMA采样帧**：24样本（3通道×8）@ 1kHz → 8ms周期
+- **每通道有效采样**：8样本/帧（CH5、CH6、CH7）
 - **滤波窗口**：16样本 → 16ms总周期
 - **内存占用**：32字节（16 × uint16_t）
 - **响应延迟**：16ms（可接受）
@@ -524,13 +535,13 @@ if (vbus > 51.0V) {
 
 #### CUTOFF状态（关断）
 - **PA4** = HIGH（物理关断）
-- **PWM（PB0）** = 100%占空比（TIM3 CCR3=7200，恒定HIGH）
-- **双重保险**：任一输出为HIGH即关断
+- **PWM（PB0/PB1）** = 100%占空比（TIM3 CCR3/CCR4=7200，恒定HIGH）
+- **多路保险**：任一输出为HIGH即关断
 
 #### CONDUCTION状态（导通）
 - **PA4** = LOW（物理导通）
-- **PWM（PB0）** = 0%占空比（TIM3 CCR3=0，恒定LOW）
-- **完全导通**：两个输出都确保LOW
+- **PWM（PB0/PB1）** = 0%占空比（TIM3 CCR3/CCR4=0，恒定LOW）
+- **完全导通**：三路输出都确保LOW
 
 ---
 
@@ -548,9 +559,9 @@ if (vbus > 51.0V) {
 - 确保所有字符串≤16字符
 - 检查`OLED_Clear()`是否在每次更新前调用
 
-### ADC值显示为0，RDY=0
+### ADC值显示为0，R=0
 
-**症状**：`ADC:0`，`TER110(48,51)`
+**症状**：`ADC5:0`，`TER110(48,51)`
 
 **原因**：
 - TIM2未产生ADC触发信号
@@ -644,9 +655,9 @@ if (vbus > 51.0V) {
 
 **快速测试**：
 1. 烧录最新固件（含软件滤波）
-2. PA5引脚悬空 → 读数应稳定在小范围内
+2. PA5/PA6/PA7引脚悬空 → 读数应稳定在小范围内
 3. 如仍有波动 → 添加10kΩ下拉到GND
-4. 验证：PA5接地显示0，接3.3V显示约82.5V
+4. 验证：PA5接地显示0，接3.3V显示约82.5V（PA6/PA7可用串口ADC6/ADC7观测）
 
 ---
 
@@ -674,7 +685,7 @@ if (vbus > 51.0V) {
 | I2C速率 | 400 | kHz (Fast Mode) |
 | OLED刷新率 | 1 | Hz |
 | UART波特率 | 115200 | baud (USART2) |
-| **DMA缓冲区** | 8 | 样本 @ 1kHz |
+| **DMA缓冲区** | 24 | 样本（3通道×8）@ 1kHz |
 | **滤波窗口** | 16 | 样本 (16ms周期) |
 | **滤波延迟** | 16 | ms |
 | **PWM常量** | PWM_DUTY_CUTOFF/CONDUCTION | 使用HAL宏设置占空比 |
@@ -682,12 +693,12 @@ if (vbus > 51.0V) {
 ### 内存占用
 
 ```
-RAM:   2176 B / 20 KB (10.62%)
-FLASH: 37624 B / 64 KB (57.41%)
+RAM:   2536 B / 20 KB (12.38%)
+FLASH: 33864 B / 64 KB (51.67%)
 ```
 
 **RAM使用明细**：
-- ADC DMA缓冲区：16字节（8 × uint16_t）
+- ADC DMA缓冲区：48字节（24 × uint16_t）
 - 滤波器缓冲区：32字节（16 × uint16_t）
 - 滤波器计数器：1字节（filter_count）
 - 系统变量：约2.1KB
@@ -703,7 +714,7 @@ FLASH: 37624 B / 64 KB (57.41%)
    - 修复：显式使能`DMA_IT_TC | DMA_IT_HT`
 
 2. **TIM2未触发ADC**
-   - 问题：`ADC:0`，ADC未工作
+   - 问题：`ADC5:0`，ADC未工作
    - 修复：
      - OC模式设为`TIM_OCMODE_TIMING`
      - 使能CC2输出：`TIM2->CCER |= TIM_CCER_CC2E`
@@ -756,6 +767,12 @@ FLASH: 37624 B / 64 KB (57.41%)
     - 问题：`generate code <project_root>` 在当前项目中可能落到 `Src/`、`Inc/`，导致构建仍使用旧的 `Core/Src`、`Core/Inc`
     - 修复：`cube_headless.txt` 统一采用 `project toolchain CMake` + `project name Vtest03` + `project generate`
     - 效果：IOC 修改会稳定落地到实际参与编译的源码目录
+
+12. **ADC/PWM 通道扩展**（✅ 当前版本）
+    - 新增 ADC：PA6/ADC1_IN6、PA7/ADC1_IN7，与 PA5 一致使用 TIM2_CC2 外部触发和 71.5 周期采样
+    - 新增 PWM：PB1/TIM3_CH4，与 PB0/TIM3_CH3 同频同占空比联动
+    - DMA 布局升级：`3通道 × 每通道8样本`（总24样本交错缓冲区）
+    - 控制逻辑：迟滞控制继续以 ADC5（PA5）为主，ADC6/ADC7 用于扩展监测
 
 ---
 

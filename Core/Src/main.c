@@ -50,9 +50,15 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-/* ADC DMA buffer - 8 samples for hardware-triggered sampling at 1 kHz */
-#define ADC_BUFFER_SIZE 8
+/* ADC DMA buffer layout: [CH5,CH6,CH7, CH5,CH6,CH7, ...] */
+#define ADC_CHANNEL_COUNT 3U
+#define ADC_SAMPLES_PER_CHANNEL 8U
+#define ADC_BUFFER_SIZE (ADC_CHANNEL_COUNT * ADC_SAMPLES_PER_CHANNEL)
+#define ADC_CH_VBUS_INDEX 0U
+#define ADC_CH_AUX1_INDEX 1U
+#define ADC_CH_AUX2_INDEX 2U
 uint16_t adc_buffer[ADC_BUFFER_SIZE];
+uint16_t adc_channel_avg[ADC_CHANNEL_COUNT] = {0};
 
 /* Flag set by DMA callback when new data is available */
 volatile uint8_t adc_data_ready = 0;
@@ -87,9 +93,9 @@ uint8_t filter_index = 0;
 uint8_t filter_count = 0;        /* Tracks number of samples filled */
 uint8_t filter_initialized = 0;
 
-/* PWM duty cycle constants for TIM3 CH3 (ARR=7199)
- * CCR3 = ARR + 1 = 7200 gives constant HIGH (100% duty = cutoff)
- * CCR3 = 0 gives constant LOW (0% duty = conduction) */
+/* PWM duty cycle constants for TIM3 CH3/CH4 (ARR=7199)
+ * CCRx = ARR + 1 = 7200 gives constant HIGH (100% duty = cutoff)
+ * CCRx = 0 gives constant LOW (0% duty = conduction) */
 #define PWM_DUTY_CUTOFF     7200  /* 100% duty = constant HIGH */
 #define PWM_DUTY_CONDUCTION 0     /* 0% duty = constant LOW */
 /* USER CODE END PV */
@@ -100,6 +106,7 @@ void SystemClock_Config(void);
 void Process_Voltage_And_Control(void);
 void Update_OLED_Display(void);
 void Set_Output_State(SystemState_t state);
+static uint16_t Compute_Channel_Average(uint8_t channel_index);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -168,13 +175,18 @@ int main(void)
   /*
    * Startup sequence - ensure safe default state
    * 1. GPIO PA4 already initialized HIGH (OFF) by MX_GPIO_Init()
-   * 2. Set PWM to 100% duty (constant HIGH = OFF state)
-   *    For TIM3: ARR=7199, so CCR3 = ARR + 1 = 7200 gives constant HIGH
+   * 2. Set PWM CH3/CH4 to 100% duty (constant HIGH = OFF state)
+   *    For TIM3: ARR=7199, so CCRx = ARR + 1 = 7200 gives constant HIGH
    */
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, PWM_DUTY_CUTOFF);  /* 100% duty = cutoff */
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, PWM_DUTY_CUTOFF);
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, PWM_DUTY_CUTOFF);
 
-  /* Start PWM output on CH3 (PB0) */
+  /* Start PWM outputs on CH3 (PB0) and CH4 (PB1) */
   if (HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4) != HAL_OK)
   {
     Error_Handler();
   }
@@ -208,7 +220,7 @@ int main(void)
   /* Print startup message via UART */
   printf("\r\n========================================\r\n");
   printf("Power Protection System v2.0\r\n");
-  printf("ADC: PA5/CH5, PWM: PB0/CH3, GPIO: PA4\r\n");
+  printf("ADC: PA5/PA6/PA7 (CH5/6/7), PWM: PB0/CH3 + PB1/CH4, GPIO: PA4\r\n");
   printf("UART: PA2/PA3 @ 115200\r\n");
   printf("========================================\r\n");
   /* USER CODE END 2 */
@@ -316,22 +328,33 @@ void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
   (void)hadc;
 }
 
+static uint16_t Compute_Channel_Average(uint8_t channel_index)
+{
+  uint32_t sum = 0U;
+
+  for (uint8_t i = channel_index; i < ADC_BUFFER_SIZE; i += ADC_CHANNEL_COUNT)
+  {
+    sum += adc_buffer[i];
+  }
+
+  return (uint16_t)(sum / ADC_SAMPLES_PER_CHANNEL);
+}
+
 /**
  * @brief Process ADC data and apply hysteresis control logic
  * @note Called from main loop when adc_data_ready flag is set
  */
 void Process_Voltage_And_Control(void)
 {
-  uint32_t adc_sum = 0;
   float adc_avg, vadc, vbus;
   SystemState_t new_state;
 
-  /* Calculate average of 8 DMA samples */
-  for (uint8_t i = 0; i < ADC_BUFFER_SIZE; i++)
+  /* Calculate per-channel average from interleaved DMA buffer */
+  for (uint8_t ch = 0; ch < ADC_CHANNEL_COUNT; ch++)
   {
-    adc_sum += adc_buffer[i];
+    adc_channel_avg[ch] = Compute_Channel_Average(ch);
   }
-  adc_avg = (float)adc_sum / ADC_BUFFER_SIZE;
+  adc_avg = (float)adc_channel_avg[ADC_CH_VBUS_INDEX];
 
   /* Apply moving average filter for noise reduction
    * This stabilizes readings when ADC input has interference */
@@ -411,9 +434,9 @@ void Process_Voltage_And_Control(void)
 }
 
 /**
- * @brief Set output state (PA1 and PWM) based on system state
+ * @brief Set output state (PA4 and PWM) based on system state
  * @param state: Desired system state
- * @note Updates PA1 and PWM synchronously
+ * @note Updates PA4 and PWM synchronously
  */
 void Set_Output_State(SystemState_t state)
 {
@@ -421,20 +444,22 @@ void Set_Output_State(SystemState_t state)
   {
     /* CUTOFF state: Power OFF
      * PA4 = HIGH (cutoff)
-     * PWM CH3 (PB0) = 100% duty (constant HIGH = cutoff)
+     * PWM CH3/CH4 (PB0/PB1) = 100% duty (constant HIGH = cutoff)
      */
     HAL_GPIO_WritePin(POWER_CTRL_GPIO_Port, POWER_CTRL_Pin, GPIO_PIN_SET);
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, PWM_DUTY_CUTOFF);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, PWM_DUTY_CUTOFF);
     printf("[STATE] CUTOFF\r\n");
   }
   else  /* STATE_CONDUCTION */
   {
     /* CONDUCTION state: Power ON
      * PA4 = LOW (conduction)
-     * PWM CH3 (PB0) = 0% duty (constant LOW = conduction)
+     * PWM CH3/CH4 (PB0/PB1) = 0% duty (constant LOW = conduction)
      */
     HAL_GPIO_WritePin(POWER_CTRL_GPIO_Port, POWER_CTRL_Pin, GPIO_PIN_RESET);
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, PWM_DUTY_CONDUCTION);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, PWM_DUTY_CONDUCTION);
     printf("[STATE] CONDUCTION\r\n");
   }
 }
@@ -471,15 +496,11 @@ void Update_OLED_Display(void)
   }
   OLED_ShowString(2, 16, "U");  /* LUX - U at right side */
 
-  /* Debug: Display raw ADC value to verify ADC is working
-   * Expected: ~0 when ADC input grounded, ~400-800 at 48-51V */
-  uint32_t adc_avg = 0;
-  for (uint8_t i = 0; i < ADC_BUFFER_SIZE; i++)
-  {
-    adc_avg += adc_buffer[i];
-  }
-  adc_avg /= ADC_BUFFER_SIZE;
-  snprintf(line_buffer, sizeof(line_buffer), "ADC:%lu", adc_avg);
+  /* Display CH5 raw ADC average used by control loop */
+  uint32_t adc_avg = Compute_Channel_Average(ADC_CH_VBUS_INDEX);
+  uint32_t adc_aux1 = Compute_Channel_Average(ADC_CH_AUX1_INDEX);
+  uint32_t adc_aux2 = Compute_Channel_Average(ADC_CH_AUX2_INDEX);
+  snprintf(line_buffer, sizeof(line_buffer), "ADC5:%lu", adc_avg);
   OLED_ShowString(3, 1, line_buffer);
   OLED_ShowString(3, 16, "X");  /* LUX - X at right side */
 
@@ -497,8 +518,8 @@ void Update_OLED_Display(void)
   /* Send periodic debug info via UART without float-format dependency */
   uint32_t monitor_vbus_int = (uint32_t)vbus_voltage;
   uint32_t monitor_vbus_frac = (uint32_t)(vbus_voltage * 10.0f) % 10;
-  printf("[MONITOR] Vbus=%lu.%luV ADC=%lu State=%s\r\n",
-         monitor_vbus_int, monitor_vbus_frac, adc_avg,
+  printf("[MONITOR] Vbus=%lu.%luV ADC5=%lu ADC6=%lu ADC7=%lu State=%s\r\n",
+         monitor_vbus_int, monitor_vbus_frac, adc_avg, adc_aux1, adc_aux2,
          (current_state == STATE_CUTOFF) ? "CUTOFF" : "CONDUCTION");
 }
 /* USER CODE END 4 */

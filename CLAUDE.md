@@ -31,9 +31,9 @@ This is an STM32CubeMX + CLion project. The `Vtest03.ioc` file is the STM32CubeM
 The system uses hardware-triggered peripherals exclusively:
 
 - **USART2**: Debug output on PA2(TX)/PA3(RX) at 115200 baud; printf redirected via `_write()`
-- **ADC1**: Triggered by TIM2_CC2 at 1 kHz, DMA1_Channel1 circular mode with 8-sample buffer; input on PA5 (ADC_IN5)
+- **ADC1**: Triggered by TIM2_CC2 at 1 kHz, DMA1_Channel1 circular mode with interleaved 24-sample buffer (PA5/PA6/PA7; each channel 8 samples)
 - **TIM2**: Output Compare CH2 for ADC triggering (PSC=71, ARR=999, CCR2=1); TIM2->CCER CC2E must be set manually
-- **TIM3**: 10 kHz PWM on PB0/CH3 for power control (PSC=0, ARR=7199, PWM_DUTY_CUTOFF=7200 for 100% default)
+- **TIM3**: 10 kHz PWM on PB0/CH3 and PB1/CH4 for power control (PSC=0, ARR=7199, PWM_DUTY_CUTOFF=7200 for 100% default)
 - **I2C1**: SSD1306 OLED display on PB6/PB7 at 400 kHz
 - **GPIO PA4** (label: POWER_CTRL): Digital output for power control
 
@@ -45,7 +45,7 @@ The external gate driver is **LOW-level active**:
 
 Default (safe) state after reset:
 - PA4 = HIGH (OFF) — configured in IOC via `PA4.PinState=GPIO_PIN_SET`
-- PWM (TIM3_CH3/PB0) = 100% duty (constant HIGH/OFF) - set as PWM_DUTY_CUTOFF = ARR + 1 = 7200
+- PWM (TIM3_CH3/PB0 and TIM3_CH4/PB1) = 100% duty (constant HIGH/OFF) - set as PWM_DUTY_CUTOFF = ARR + 1 = 7200
 
 ### Software Architecture Pattern
 
@@ -66,7 +66,7 @@ ISR/DMA Callbacks → Set Flags → Main Loop Processing → Output Updates
 ### Voltage Calculation
 
 ```
-adc_avg = average of 8 DMA samples
+adc_avg = average of CH5 samples (8 samples from interleaved DMA frame)
 Vadc = adc_avg * 3.3 / 4095
 Vbus = Vadc * 25
 ```
@@ -92,6 +92,7 @@ PWM duty cycle is controlled via named constants (not hardcoded values):
 Use HAL macro for setting PWM:
 ```c
 __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, PWM_DUTY_CUTOFF);
+__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, PWM_DUTY_CUTOFF);
 ```
 
 ## Key Constraints from PRD.md
@@ -122,8 +123,11 @@ __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, PWM_DUTY_CUTOFF);
 | UART TX       | PA2  | Output    | USART2, 115200 baud            |
 | UART RX       | PA3  | Input     | USART2                         |
 | Power control | PA4  | Output    | HIGH=OFF, LOW=ON (LOW-active)  |
-| ADC voltage   | PA5  | Analog    | ADC1_IN5, x25 divider          |
-| PWM output    | PB0  | Output    | TIM3_CH3, 10 kHz               |
+| ADC voltage 1 | PA5  | Analog    | ADC1_IN5, x25 divider (control)|
+| ADC voltage 2 | PA6  | Analog    | ADC1_IN6                       |
+| ADC voltage 3 | PA7  | Analog    | ADC1_IN7                       |
+| PWM output 1  | PB0  | Output    | TIM3_CH3, 10 kHz               |
+| PWM output 2  | PB1  | Output    | TIM3_CH4, 10 kHz               |
 | OLED SCL      | PB6  | Output    | I2C1, 400 kHz                  |
 | OLED SDA      | PB7  | I/O       | I2C1                           |
 
