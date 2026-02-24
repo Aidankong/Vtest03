@@ -82,7 +82,14 @@ uint32_t last_oled_update = 0;
 #define FILTER_SIZE 16
 uint16_t filter_buffer[FILTER_SIZE];
 uint8_t filter_index = 0;
+uint8_t filter_count = 0;        /* Tracks number of samples filled */
 uint8_t filter_initialized = 0;
+
+/* PWM duty cycle constants for TIM3 CH3 (ARR=7199)
+ * CCR3 = ARR + 1 = 7200 gives constant HIGH (100% duty = cutoff)
+ * CCR3 = 0 gives constant LOW (0% duty = conduction) */
+#define PWM_DUTY_CUTOFF     7200  /* 100% duty = constant HIGH */
+#define PWM_DUTY_CONDUCTION 0     /* 0% duty = constant LOW */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -162,7 +169,7 @@ int main(void)
    * 2. Set PWM to 100% duty (constant HIGH = OFF state)
    *    For TIM3: ARR=7199, so CCR3 = ARR + 1 = 7200 gives constant HIGH
    */
-  TIM3->CCR3 = 7200;  /* 100% duty = constant HIGH = cutoff */
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, PWM_DUTY_CUTOFF);  /* 100% duty = cutoff */
 
   /* Start PWM output on CH3 (PB0) */
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
@@ -329,17 +336,27 @@ void Process_Voltage_And_Control(void)
   uint32_t filtered_sum = 0;
   if (!filter_initialized)
   {
-    /* First fill: use available samples */
-    for (uint8_t i = 0; i <= filter_index; i++)
-    {
-      filtered_sum += filter_buffer[i];
-    }
-    adc_avg = (float)filtered_sum / (filter_index + 1);
+    /* Increment sample counter during buffer filling phase */
+    filter_count++;
 
-    /* Mark as initialized after first complete cycle */
-    if (filter_index == 0 && filtered_sum > 0)
+    if (filter_count < FILTER_SIZE)
     {
+      /* Still filling: average only available samples */
+      for (uint8_t i = 0; i < filter_count; i++)
+      {
+        filtered_sum += filter_buffer[i];
+      }
+      adc_avg = (float)filtered_sum / filter_count;
+    }
+    else
+    {
+      /* Buffer full: use all FILTER_SIZE samples and mark initialized */
+      for (uint8_t i = 0; i < FILTER_SIZE; i++)
+      {
+        filtered_sum += filter_buffer[i];
+      }
       filter_initialized = 1;
+      adc_avg = (float)filtered_sum / FILTER_SIZE;
     }
   }
   else
@@ -401,7 +418,7 @@ void Set_Output_State(SystemState_t state)
      * PWM CH3 (PB0) = 100% duty (constant HIGH = cutoff)
      */
     HAL_GPIO_WritePin(POWER_CTRL_GPIO_Port, POWER_CTRL_Pin, GPIO_PIN_SET);
-    TIM3->CCR3 = 7200;  /* ARR + 1 = constant HIGH */
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, PWM_DUTY_CUTOFF);
     printf("[STATE] CUTOFF\r\n");
   }
   else  /* STATE_CONDUCTION */
@@ -411,7 +428,7 @@ void Set_Output_State(SystemState_t state)
      * PWM CH3 (PB0) = 0% duty (constant LOW = conduction)
      */
     HAL_GPIO_WritePin(POWER_CTRL_GPIO_Port, POWER_CTRL_Pin, GPIO_PIN_RESET);
-    TIM3->CCR3 = 0;  /* 0% duty = constant LOW */
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, PWM_DUTY_CONDUCTION);
     printf("[STATE] CONDUCTION\r\n");
   }
 }

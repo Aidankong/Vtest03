@@ -33,7 +33,7 @@ The system uses hardware-triggered peripherals exclusively:
 - **USART2**: Debug output on PA2(TX)/PA3(RX) at 115200 baud; printf redirected via `_write()`
 - **ADC1**: Triggered by TIM2_CC2 at 1 kHz, DMA1_Channel1 circular mode with 8-sample buffer; input on PA5 (ADC_IN5)
 - **TIM2**: Output Compare CH2 for ADC triggering (PSC=71, ARR=999, CCR2=1); TIM2->CCER CC2E must be set manually
-- **TIM3**: 10 kHz PWM on PB0/CH3 for power control (PSC=0, ARR=7199, CCR3=7200 for 100% default)
+- **TIM3**: 10 kHz PWM on PB0/CH3 for power control (PSC=0, ARR=7199, PWM_DUTY_CUTOFF=7200 for 100% default)
 - **I2C1**: SSD1306 OLED display on PB6/PB7 at 400 kHz
 - **GPIO PA4** (label: POWER_CTRL): Digital output for power control
 
@@ -45,7 +45,7 @@ The external gate driver is **LOW-level active**:
 
 Default (safe) state after reset:
 - PA4 = HIGH (OFF) — CubeMX generates RESET; corrected in `MX_GPIO_Init` USER CODE block
-- PWM (TIM3_CH3/PB0) = 100% duty (constant HIGH/OFF) - set as CCR3 = ARR + 1 = 7200
+- PWM (TIM3_CH3/PB0) = 100% duty (constant HIGH/OFF) - set as PWM_DUTY_CUTOFF = ARR + 1 = 7200
 
 ### Software Architecture Pattern
 
@@ -59,8 +59,8 @@ ISR/DMA Callbacks → Set Flags → Main Loop Processing → Output Updates
 
 ### Hysteresis Logic (Strict)
 
-- Vbus > 51V: Cut off (PA4=HIGH, TIM3_CH3 CCR3=7200/100%)
-- Vbus < 48V: Conduct (PA4=LOW, TIM3_CH3 CCR3=0/0%)
+- Vbus > 51V: Cut off (PA4=HIGH, PWM=PWM_DUTY_CUTOFF/100%)
+- Vbus < 48V: Conduct (PA4=LOW, PWM=PWM_DUTY_CONDUCTION/0%)
 - 48V ≤ Vbus ≤ 51V: Maintain previous state (no toggling)
 
 ### Voltage Calculation
@@ -69,6 +69,29 @@ ISR/DMA Callbacks → Set Flags → Main Loop Processing → Output Updates
 adc_avg = average of 8 DMA samples
 Vadc = adc_avg * 3.3 / 4095
 Vbus = Vadc * 25
+```
+
+### Software Filter (16-sample Moving Average)
+
+The system uses a 16-sample moving average filter to eliminate ADC noise:
+
+- **Buffer**: `filter_buffer[16]` - circular buffer for averaged samples
+- **Counter**: `filter_count` - tracks number of samples filled (0-16)
+- **Flag**: `filter_initialized` - set to 1 only after buffer is fully filled
+- **Initialization**: During filling phase, averages only available samples; after 16 samples, uses full buffer
+
+### PWM Duty Cycle Constants
+
+PWM duty cycle is controlled via named constants (not hardcoded values):
+
+```c
+#define PWM_DUTY_CUTOFF     7200  // 100% duty = constant HIGH (ARR + 1)
+#define PWM_DUTY_CONDUCTION 0     // 0% duty = constant LOW
+```
+
+Use HAL macro for setting PWM:
+```c
+__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, PWM_DUTY_CUTOFF);
 ```
 
 ## Key Constraints from PRD.md
