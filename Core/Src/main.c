@@ -80,6 +80,10 @@ float vbus_voltage = 0.0f;
 uint32_t last_oled_update = 0;
 #define OLED_UPDATE_INTERVAL 1000  /* 1Hz (1000ms/1 = 1000ms) */
 
+/* TIM2-based software ADC triggering */
+uint16_t last_tim2_cnt = 0;
+#define ADC_TRIGGER_INTERVAL 10  /* 1ms @ 10kHz TIM2 = 72MHz/7200 = 10kHz, but PSC=71, ARR=999 gives 1kHz */
+
 /* Voltage thresholds for hysteresis */
 #define VBUS_UPPER_THRESHOLD 51.0f
 #define VBUS_LOWER_THRESHOLD 48.0f
@@ -199,15 +203,35 @@ int main(void)
     Error_Handler();
   }
 
-  /* Start TIM2 Output Compare LAST - this starts triggering the ADC at 1 kHz
-   * Delay: ensure ADC DMA is fully ready before first trigger */
-  HAL_Delay(10);
-
-  /* Start TIM2 - this should trigger ADC conversions at 1 kHz */
+  /* CRITICAL FIX: Ensure ADC DMA bit is set
+   * HAL_ADC_Start_DMA should do this, but verify it */
+  SET_BIT(ADC1->CR2, ADC_CR2_DMA);
+  
+  /* Start TIM2 Output Compare on CH2 for ADC triggering.
+   * CC2 event fires at CNT==CCR2 (every 1 ms) and triggers ADC. */
   if (HAL_TIM_OC_Start(&htim2, TIM_CHANNEL_2) != HAL_OK)
   {
     Error_Handler();
   }
+
+  printf("[DEBUG] ADC1->CR2 after start: 0x%08lX (DMA=%lu,EXTTRIG=%lu)\r\n",
+         ADC1->CR2,
+         (ADC1->CR2 & ADC_CR2_DMA) ? 1UL : 0UL,
+         (ADC1->CR2 & ADC_CR2_EXTTRIG) ? 1UL : 0UL);
+  printf("[DEBUG] TIM2_CCER = 0x%04lX (CC2E=%lu)\r\n",
+         TIM2->CCER, (TIM2->CCER & TIM_CCER_CC2E) ? 1UL : 0UL);
+  printf("[DEBUG] TIM2_CCMR1 = 0x%04lX (OC2M=%lu, expect 3=TOGGLE)\r\n",
+         TIM2->CCMR1, (TIM2->CCMR1 & TIM_CCMR1_OC2M) >> TIM_CCMR1_OC2M_Pos);
+  printf("[DEBUG] TIM2->SR = 0x%04lX (CC2IF=%lu)\r\n",
+         TIM2->SR, (TIM2->SR & TIM_SR_CC2IF) ? 1UL : 0UL);
+  printf("[DEBUG] DMA1_Ch1->CCR = 0x%04lX (TCIE=%lu,HTIE=%lu)\r\n",
+         DMA1_Channel1->CCR,
+         (DMA1_Channel1->CCR & DMA_CCR_TCIE) ? 1UL : 0UL,
+         (DMA1_Channel1->CCR & DMA_CCR_HTIE) ? 1UL : 0UL);
+  printf("[DEBUG] DMA1_Ch1->CNDTR = %lu (remaining transfers)\r\n",
+         DMA1_Channel1->CNDTR);
+  
+  printf("[INFO] ADC configured for TIM2_CC2 external trigger\r\n");
 
   /* Initialize OLED display */
   OLED_Init();
@@ -314,6 +338,8 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
   {
     adc_full_buffer_events++;
     adc_data_ready = 1;  /* Set flag for main loop processing */
+    /* Debug: print first ADC value */
+    printf("[ADC_CB] evt=%lu buf[0]=%u\r\n", adc_full_buffer_events, adc_buffer[0]);
   }
 }
 
@@ -518,9 +544,16 @@ void Update_OLED_Display(void)
   /* Send periodic debug info via UART without float-format dependency */
   uint32_t monitor_vbus_int = (uint32_t)vbus_voltage;
   uint32_t monitor_vbus_frac = (uint32_t)(vbus_voltage * 10.0f) % 10;
-  printf("[MONITOR] Vbus=%lu.%luV ADC5=%lu ADC6=%lu ADC7=%lu State=%s\r\n",
+  /* Debug: Show first few ADC buffer values and DMA event count */
+  printf("[MONITOR] Vbus=%lu.%luV ADC5=%lu ADC6=%lu ADC7=%lu State=%s DMA_EVT=%lu\r\n",
          monitor_vbus_int, monitor_vbus_frac, adc_avg, adc_aux1, adc_aux2,
-         (current_state == STATE_CUTOFF) ? "CUTOFF" : "CONDUCTION");
+         (current_state == STATE_CUTOFF) ? "CUTOFF" : "CONDUCTION",
+         adc_full_buffer_events);
+  printf("[DEBUG] adc_buffer[0-2]=%u,%u,%u TIM2_SR=0x%04lX(CC2IF=%lu)\r\n",
+         adc_buffer[0], adc_buffer[1], adc_buffer[2],
+         TIM2->SR, (TIM2->SR & TIM_SR_CC2IF) ? 1UL : 0UL);
+  printf("[DEBUG] DMA1_Ch1->CNDTR=%lu ISR=0x%04lX\r\n",
+         DMA1_Channel1->CNDTR, DMA1->ISR);
 }
 /* USER CODE END 4 */
 

@@ -72,7 +72,7 @@ void MX_TIM2_Init(void)
   {
     Error_Handler();
   }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_OC2REF;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
   {
@@ -88,11 +88,14 @@ void MX_TIM2_Init(void)
   }
   /* USER CODE BEGIN TIM2_Init 2 */
 
-  /* Additional configuration for ADC triggering:
-   * Enable CC2 output (bit position: CC2E at bit 4 in CCER register)
-   * This is required for ADC external trigger to work on STM32F1
-   * Even though we don't use the physical pin, the CC2 event must be enabled */
-  htim2.Instance->CCER |= TIM_CCER_CC2E;
+  /* CRITICAL: Override OC2 mode from TIMING to TOGGLE.
+   * TIM_OCMODE_TIMING ("frozen") never drives OC2REF, so the ADC external
+   * trigger line receives no edges after startup. TOGGLE mode flips OC2REF
+   * on every CCR2 match, producing a rising edge every 1 ms that triggers
+   * the ADC.
+   * OC2M is CCMR1[14:12]; TIM_OCMODE_TOGGLE=0x0030 is the unshifted mode
+   * constant (same encoding as OC1M). For CH2 it must be shifted left by 8. */
+  MODIFY_REG(TIM2->CCMR1, TIM_CCMR1_OC2M, TIM_OCMODE_TOGGLE << 8U);
 
   /* USER CODE END TIM2_Init 2 */
 

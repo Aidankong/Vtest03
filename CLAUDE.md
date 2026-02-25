@@ -31,8 +31,8 @@ This is an STM32CubeMX + CLion project. The `Vtest03.ioc` file is the STM32CubeM
 The system uses hardware-triggered peripherals exclusively:
 
 - **USART2**: Debug output on PA2(TX)/PA3(RX) at 115200 baud; printf redirected via `_write()`
-- **ADC1**: Triggered by TIM2_CC2 at 1 kHz, DMA1_Channel1 circular mode with interleaved 24-sample buffer (PA5/PA6/PA7; each channel 8 samples)
-- **TIM2**: Output Compare CH2 for ADC triggering (PSC=71, ARR=999, CCR2=1); TIM2->CCER CC2E must be set manually
+- **ADC1**: Triggered by TIM2_CC2 at ~500 Hz, DMA1_Channel1 circular mode with interleaved 24-sample buffer (PA5/PA6/PA7; each channel 8 samples)
+- **TIM2**: Output Compare CH2 for ADC triggering (PSC=71, ARR=999, CCR2=1, **OC2M=TOGGLE**); CC2E enabled via `HAL_TIM_OC_Start()`; OC2M must be TOGGLE (not TIMING) so OC2REF generates edges
 - **TIM3**: 10 kHz PWM on PB0/CH3 and PB1/CH4 for power control (PSC=0, ARR=7199, PWM_DUTY_CUTOFF=7200 for 100% default)
 - **I2C1**: SSD1306 OLED display on PB6/PB7 at 400 kHz
 - **GPIO PA4** (label: POWER_CTRL): Digital output for power control
@@ -160,3 +160,72 @@ exit
 ```
 
 For this repository, prefer `project generate`: `generate code /project_root` may generate `Src/Inc`, while the build consumes `Core/Src` and `Core/Inc`.
+
+## Known Issues and Fixes
+
+### TIM2 OC2 Mode Must Be TOGGLE, Not TIMING
+
+**Symptom**: `DMA_EVT=0`, `DMA1_Ch1->CNDTR` frozen, ADC buffer static after one initial conversion.
+
+**Root cause**: STM32CubeMX generates `TIM_OCMODE_TIMING` for TIM2_CH2. This is "frozen" mode — OC2REF is never driven. The ADC external trigger on STM32F1 is edge-sensitive on the **OC2REF signal**, not the CC2IF flag. With TIMING mode, OC2REF never toggles, so the ADC receives only one spurious edge at startup (from a pre-existing CC2IF condition) and then stops.
+
+**Fix** (`Core/Src/tim.c`, USER CODE BEGIN TIM2_Init 2):
+```c
+/* OC2M is CCMR1[14:12]; TIM_OCMODE_TOGGLE=0x0030 is unshifted (OC1M position).
+ * For CH2 it must be shifted left by 8 to reach the OC2M field. */
+MODIFY_REG(TIM2->CCMR1, TIM_CCMR1_OC2M, TIM_OCMODE_TOGGLE << 8U);
+```
+
+**Effect**: OC2REF flips on every CCR2 match (every 1 ms at ARR=999), producing a rising edge every 2 ms → ~500 Hz effective ADC trigger rate.
+
+**Trigger chain**: TIM2 CCR2 match → OC2REF toggles → rising edge → ADC starts 3-channel scan (CH5/CH6/CH7) → 3 DMA transfers → repeat.
+
+**After CubeMX regeneration**: This patch in `USER CODE BEGIN TIM2_Init 2` is preserved. Verify `TIM2_CCMR1` startup debug line shows `OC2M=3`.
+
+---
+
+### TIM2 Must Be Started with HAL_TIM_OC_Start, Not HAL_TIM_Base_Start
+
+**Symptom**: CC2E bit not set, no CC2 events generated even with TOGGLE mode.
+
+**Root cause**: `HAL_TIM_Base_Start()` only enables the counter. It does not set the CC2E bit in CCER, so the output compare channel is inactive.
+
+**Fix** (`Core/Src/main.c`, USER CODE BEGIN 2):
+```c
+HAL_TIM_OC_Start(&htim2, TIM_CHANNEL_2);  // enables CC2E
+```
+
+**Verify**: Startup debug should show `TIM2_CCER = 0x0010 (CC2E=1)`.
+
+---
+
+### TIM_OCMODE_TOGGLE Constant Is Not Pre-Shifted for CH2
+
+**Symptom**: CCMR1 patch appears to succeed but `OC2M` reads back as 0 in debug output.
+
+**Root cause**: `TIM_OCMODE_TOGGLE = 0x00000030` is the raw 3-bit mode value (`011`) placed at the OC**1**M bit position (bits [6:4]). The HAL's `TIM_OC2_SetConfig()` internally applies `OCMode << 8` to reach OC**2**M (bits [14:12]). When calling `MODIFY_REG` directly, the shift must be applied manually.
+
+```c
+// Wrong - value 0x0030 is masked to 0 by TIM_CCMR1_OC2M (0x7000):
+MODIFY_REG(TIM2->CCMR1, TIM_CCMR1_OC2M, TIM_OCMODE_TOGGLE);
+
+// Correct - shift by 8 to align with OC2M field:
+MODIFY_REG(TIM2->CCMR1, TIM_CCMR1_OC2M, TIM_OCMODE_TOGGLE << 8U);
+```
+
+**General rule**: When directly writing timer OC mode bits for CH2/CH4, always shift the `TIM_OCMODE_*` constant left by 8 (CH2) or use the HAL `TIM_OC_InitTypeDef` path which handles the shift internally.
+
+---
+
+### Debugging ADC+DMA Pipeline: Register Checklist
+
+When `DMA_EVT` stays at 0, check these registers in order:
+
+| Register | Expected | Meaning if wrong |
+|----------|----------|-----------------|
+| `ADC1->CR2` | `DMA=1, EXTTRIG=1` | DMA or external trigger not enabled |
+| `TIM2->CCER` | `CC2E=1 (0x0010)` | `HAL_TIM_Base_Start` used instead of `HAL_TIM_OC_Start` |
+| `TIM2->CCMR1` | `OC2M=3 (0x3000)` | TOGGLE mode not applied or shift missing |
+| `DMA1_Ch1->CCR` | `TCIE=1, HTIE=1` | DMA interrupts not enabled |
+| `DMA1_Ch1->CNDTR` | Decrementing | If frozen: ADC not triggering DMA transfers |
+| `DMA1->ISR` | Briefly non-zero | If always 0: DMA TC never fires (HAL clears flags in ISR) |

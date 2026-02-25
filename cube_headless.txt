@@ -1,4 +1,4 @@
-config load /Users/aidan/Documents/AI-system/Vtest03/Vtest03.ioc
+config load /home/luxsan_aard/workspace/STM32/Vtest03/Vtest03/Vtest03.ioc
 project toolchain CMake
 project name Vtest03
 project generate
